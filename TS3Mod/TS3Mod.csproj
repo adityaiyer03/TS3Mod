@@ -56,7 +56,10 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="TS3PerformanceMod.cs" />
+    <Compile Include="AI_CUDA_Integration.cs" />
+    <Compile Include="AI_MemoryPatch.cs" />
+    <Compile Include="CoreModule.cs" />
+    <Compile Include="TCPModule.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
