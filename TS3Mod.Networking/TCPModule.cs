@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Net.Sockets;
 using System.Reflection;
 using HarmonyLib;
 using TS3Mod.Core;
@@ -10,6 +11,8 @@ namespace TS3Mod.Networking
     public static class NetworkBufferPatch
     {
         private static readonly HashSet<int> Expanded = new HashSet<int>();
+        private static FieldInfo _tcpClientField = null;
+        private static bool _fieldSearched = false;
 
         static IEnumerable<MethodBase> TargetMethods()
         {
@@ -19,8 +22,11 @@ namespace TS3Mod.Networking
 
             foreach (var m in managerType.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
             {
-                if (!m.IsAbstract && !m.ContainsGenericParameters)
+                // CRITICAL FIX: Do not hook noisy methods like Update to prevent severe Unity freezing
+                if (!m.IsAbstract && !m.ContainsGenericParameters && !m.Name.Contains("Update"))
+                {
                     yield return m;
+                }
             }
         }
 
@@ -28,25 +34,44 @@ namespace TS3Mod.Networking
         {
             try
             {
-                FieldInfo[] fields = __instance.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                for (int i = 0; i < fields.Length; i++)
+                // CRITICAL FIX: Cache the reflection field. 
+                // Calling GetFields() on every hooked method call tanks the framerate.
+                if (!_fieldSearched)
                 {
-                    FieldInfo f = fields[i];
-                    if (f.FieldType != typeof(System.Net.Sockets.TcpClient)) continue;
-
-                    System.Net.Sockets.TcpClient tcp = f.GetValue(__instance) as System.Net.Sockets.TcpClient;
-                    if (tcp == null) continue;
-
-                    int id = tcp.GetHashCode();
-                    if (Expanded.Contains(id)) return;
-
-                    tcp.ReceiveBufferSize = 10 * 1024 * 1024;
-                    tcp.SendBufferSize = 10 * 1024 * 1024;
-                    Expanded.Add(id);
-
-                    Log.I("[TS3Mod] TCP buffer set to 10MB");
-                    return;
+                    FieldInfo[] fields = __instance.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                    for (int i = 0; i < fields.Length; i++)
+                    {
+                        if (fields[i].FieldType == typeof(TcpClient))
+                        {
+                            _tcpClientField = fields[i];
+                            break;
+                        }
+                    }
+                    _fieldSearched = true;
                 }
+
+                if (_tcpClientField == null) return;
+
+                TcpClient tcp = _tcpClientField.GetValue(__instance) as TcpClient;
+                if (tcp == null) return;
+
+                int id = tcp.GetHashCode();
+                if (Expanded.Contains(id)) return;
+
+                // 1. Lower buffer size. 10MB can cause Winsock exhaustion on loopback. 1MB is more than enough.
+                tcp.ReceiveBufferSize = 1024 * 1024;
+                tcp.SendBufferSize = 1024 * 1024;
+
+                // 2. Prevent infinite hangs! If Python crashes, Unity won't freeze forever waiting for data.
+                tcp.ReceiveTimeout = 15000;
+                tcp.SendTimeout = 15000;
+
+                // 3. Keep Nagle's enabled (NoDelay = false) to prevent fragmented JSON payloads crashing the Python server.
+                tcp.NoDelay = false;
+
+                Expanded.Add(id);
+
+                Log.I("[TS3Mod] TCP limits applied (1MB buffers, 15s timeout, Nagle ON)");
             }
             catch (Exception ex)
             {

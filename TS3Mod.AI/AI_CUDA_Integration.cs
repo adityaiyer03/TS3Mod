@@ -209,8 +209,27 @@ finally:
             startInfo.EnvironmentVariables["PYTHONUTF8"] = "1";
             startInfo.EnvironmentVariables["RM_NO_PHRASE_CAP"] = "1";
 
+            // Forces the Unity/TCP bridge to flush audio in 400ms chunks rather than waiting
+            startInfo.EnvironmentVariables["RM_STREAM_FLUSH_MS"] = "400";
+            startInfo.EnvironmentVariables["RM_MAX_CHUNK_MS"] = "1200";
+
+            // Bypasses high-latency resampling algorithms 
+            startInfo.EnvironmentVariables["RM_RESAMPLE_MODE"] = "cpu";
+
+            // Prevents PyTorch CPU threads from starving the Unity main thread.
+            // Crucial for ensuring the simulation does not stutter while the GPU processes audio.
+            startInfo.EnvironmentVariables["OMP_NUM_THREADS"] = "1";
+            startInfo.EnvironmentVariables["MKL_NUM_THREADS"] = "1";
+            startInfo.EnvironmentVariables["OPENBLAS_NUM_THREADS"] = "1";
+            startInfo.EnvironmentVariables["NUMEXPR_NUM_THREADS"] = "1";
+
             bool forceCpu = isTts;
             bool preferGpu = !isTts;
+
+            if (preferGpu && startInfo.EnvironmentVariables.ContainsKey("PATH"))
+            {
+                StageMissingCudaDlls(startInfo.FileName, startInfo.EnvironmentVariables["PATH"]);
+            }
 
             if (forceCpu)
             {
@@ -368,10 +387,15 @@ finally:
         {
             string json = File.ReadAllText(cfgPath, Encoding.UTF8);
             if (!string.IsNullOrEmpty(json) && json[0] == '\uFEFF') json = json.TrimStart('\uFEFF');
+
             json = UpsertJsonString(json, "device", "cuda");
             json = UpsertJsonString(json, "compute_type", "float16");
             json = UpsertJsonNumber(json, "cpu_threads", 4);
-            json = UpsertJsonNumber(json, "final_vad_min_silence_ms", 250);
+
+            // Aggressive VAD tuning for faster TCP dispatch
+            json = UpsertJsonNumber(json, "final_vad_min_silence_ms", 200);
+            json = UpsertJsonNumber(json, "vad_min_silence_ms", 200);
+
             SafeWriteTextNoBom(cfgPath, json);
         }
 
@@ -489,6 +513,43 @@ finally:
             }
             catch { }
             return false;
+        }
+        private static void StageMissingCudaDlls(string executablePath, string injectedPath)
+        {
+            try
+            {
+                string targetDir = Path.GetDirectoryName(executablePath);
+                string[] searchPaths = injectedPath.Split(';');
+
+                foreach (string path in searchPaths)
+                {
+                    if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) continue;
+
+                    // Copy all CUDA/cuDNN DLLs into the game's executable directory so the Windows Loader finds them natively
+                    string[] dlls = Directory.GetFiles(path, "cu*.dll");
+                    foreach (string dll in dlls)
+                    {
+                        string destFile = Path.Combine(targetDir, Path.GetFileName(dll));
+                        if (!File.Exists(destFile))
+                        {
+                            File.Copy(dll, destFile, true);
+                            UnityEngine.Debug.Log($"[TS3Mod] Staged missing CUDA DLL for PyInstaller: {Path.GetFileName(dll)}");
+                        }
+                    }
+
+                    // Zlib is a hard requirement for cuDNN 9
+                    string[] zlibs = Directory.GetFiles(path, "zlibwapi.dll");
+                    foreach (string z in zlibs)
+                    {
+                        string destFile = Path.Combine(targetDir, Path.GetFileName(z));
+                        if (!File.Exists(destFile)) File.Copy(z, destFile, true);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogWarning($"[TS3Mod] Failed to stage CUDA DLLs: {ex.Message}");
+            }
         }
     }
 
