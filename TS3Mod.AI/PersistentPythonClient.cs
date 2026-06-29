@@ -64,38 +64,41 @@ namespace TS3Mod.AI
                         _proc.ErrorDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) TS3Mod.Core.Log.W("[worker-err] " + e.Data); };
                         _proc.BeginErrorReadLine();
 
-                        // wait for health
-                        bool ok = false;
-                        int attempts = 0;
-                        while (attempts < 10 && !ok)
+                        // start a background thread to wait for health (model loading can take many seconds)
+                        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
                         {
-                            attempts++;
-                            try
+                            bool ok = false;
+                            int attempts = 0;
+                            const int maxAttempts = 120; // up to ~60 seconds with 500ms sleep
+                            while (attempts < maxAttempts && !ok)
                             {
-                                var url = $"http://{Host}:{Port}/health";
-                                var req = WebRequest.Create(url);
-                                req.Timeout = 1000;
-                                using (var resp = req.GetResponse())
-                                using (var rs = new StreamReader(resp.GetResponseStream()))
+                                attempts++;
+                                try
                                 {
-                                    var txt = rs.ReadToEnd();
-                                    if (!string.IsNullOrEmpty(txt) && txt.Contains("ok")) ok = true;
+                                    var url = $"http://{Host}:{Port}/health";
+                                    var req = (HttpWebRequest)WebRequest.Create(url);
+                                    req.Timeout = 1000;
+                                    using (var resp = (HttpWebResponse)req.GetResponse())
+                                    using (var rs = new StreamReader(resp.GetResponseStream()))
+                                    {
+                                        var txt = rs.ReadToEnd();
+                                        if (!string.IsNullOrEmpty(txt) && txt.Contains("ok")) ok = true;
+                                    }
                                 }
-                            }
-                            catch
-                            {
-                                Thread.Sleep(200);
-                            }
-                        }
+                                catch { }
 
-                        if (!ok)
-                        {
-                            TS3Mod.Core.Log.W("[TS3Mod] Worker did not respond to health checks");
-                        }
-                        else
-                        {
-                            TS3Mod.Core.Log.I("[TS3Mod] Persistent Python worker started on port " + Port);
-                        }
+                                if (!ok) Thread.Sleep(500);
+                            }
+
+                            if (!ok)
+                            {
+                                TS3Mod.Core.Log.W("[TS3Mod] Worker did not respond to health checks (timeout)");
+                            }
+                            else
+                            {
+                                TS3Mod.Core.Log.I("[TS3Mod] Persistent Python worker started on port " + Port + " after " + attempts + " attempts");
+                            }
+                        });
                     }
                 }
                 catch (Exception ex)

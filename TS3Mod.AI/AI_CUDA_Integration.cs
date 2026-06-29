@@ -10,7 +10,29 @@ namespace TS3Mod.AI
 {
     public static class ProcessOptimiser
     {
+        static ProcessOptimiser()
+        {
+            try
+            {
+                UnityEngine.Application.quitting += () => StopWorker();
+            }
+            catch { }
+            try
+            {
+                AppDomain.CurrentDomain.ProcessExit += (s, e) => StopWorker();
+                AppDomain.CurrentDomain.DomainUnload += (s, e) => StopWorker();
+            }
+            catch { }
+        }
+
+        private static void StopWorker()
+        {
+            try { PersistentPythonClient.Stop(); }
+            catch (Exception ex) { TS3Mod.Core.Log.W("[TS3Mod] Failed to stop persistent worker: " + ex.Message); }
+        }
+
         private static string _pythonExe;
+        private static bool _workerStarted = false;
         private static readonly Dictionary<string, int> SpawnedPids = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         private static readonly string[] PYTHON_CANDIDATES = new string[]
@@ -76,21 +98,29 @@ namespace TS3Mod.AI
                 startInfo.EnvironmentVariables["FASTER_WHISPER_DEVICE"] = "cuda";
                 startInfo.EnvironmentVariables["CT2_CUDA_ALLOW_FP16"] = "1";
 
-                string py = FindPython(startInfo);
-                if (!string.IsNullOrEmpty(py))
+                // Start persistent worker on first interception to pre-load models and avoid repeated extraction
+                if (!_workerStarted)
                 {
-                    string sitePkgs = Path.Combine(Path.GetDirectoryName(py), "Lib", "site-packages");
-                    if (Directory.Exists(sitePkgs))
+                    _workerStarted = true;
+                    try
                     {
-                        string cudnnBin = Path.Combine(sitePkgs, "nvidia", "cudnn", "bin");
-                        string torchLib = Path.Combine(sitePkgs, "torch", "lib");
-                        string existingPath = startInfo.EnvironmentVariables["PATH"] ?? Environment.GetEnvironmentVariable("PATH");
-
-                        string newPath = $"{cudnnBin};{torchLib};{existingPath}";
-                        startInfo.EnvironmentVariables["PATH"] = newPath;
-                        Log.I($"[TS3Mod] Injected Python CUDA PATHs for vanilla fallback: {newPath.Substring(0, Math.Min(newPath.Length, 100))}...");
+                        string python = FindPython(startInfo);
+                        if (!string.IsNullOrEmpty(python))
+                        {
+                            PersistentPythonClient.EnsureStarted(python);
+                            Log.I("[TS3Mod] Persistent worker requested start.");
+                        }
+                        else
+                        {
+                            Log.W("[TS3Mod] No python found to start persistent worker.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.W("[TS3Mod] Failed to start persistent worker: " + ex.Message);
                     }
                 }
+
                 AddCudaPaths(startInfo);
                 StageMissingCudaDlls(startInfo.FileName); // HOT-DROP DLL FIX
             }
