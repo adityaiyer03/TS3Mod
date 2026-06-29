@@ -17,7 +17,7 @@ TS3Mod is a .NET Framework 4.8 solution developed in Visual Studio. This reposit
 
 Important source files:
 
-- TS3Mod/CoreModule.cs — main module currently being edited.
+- TS3Mod/CoreModule.cs — main module
 
 ## Contributing
 
