@@ -51,6 +51,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AI_CUDA_Integration.cs" />
+    <Compile Include="OnnxInference.cs" />
+    <Compile Include="PersistentPythonClient.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -58,6 +60,13 @@
       <Project>{05f05df8-1225-49dd-8c62-7fb5985f91de}</Project>
       <Name>TS3Mod.Core</Name>
     </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="worker\persistent_worker.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="bench_worker.ps1" />
+    <None Include="PERSISTENT_WORKER_README.md" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
